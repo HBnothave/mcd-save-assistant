@@ -1,0 +1,30 @@
+{
+  "name": "mcd-save-assistant",
+  "version": "1.0.0",
+  "description": "麦门省钱助手 —— 基于麦当劳 MCP 的智能点餐省钱 Skill：一键领券、营养搭配、最优凑单、活动日历、积分兑换，帮你用最少的钱吃好每一顿。",
+  "type": "module",
+  "bin": {
+    "mcd-save": "./src/index.js"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "save": "node src/index.js save",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "mcdonald",
+    "skill",
+    "麦当劳",
+    "省钱",
+    "coupon",
+    "营养"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}

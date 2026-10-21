@@ -80,6 +80,13 @@ function getClient() {
   return new McpClient({ token: token && token !== 'YOUR_MCP_TOKEN_HERE' ? token : '' });
 }
 
+const NO_TOKEN_MSG =
+  '⚠️  未配置有效的 MCP Token。\n' +
+  '    1) 打开 https://open.mcd.cn/mcp ，点击右上角【登录】用手机号验证登录\n' +
+  '    2) 点击右上角【控制台】→【激活】申请 MCP Token\n' +
+  '    3) 将 Token 复制到项目根目录 .env 的 MCD_MCP_TOKEN（参考 .env.example）\n' +
+  '    4) 重新运行对应命令';
+
 const rl = readline.createInterface({ input, output });
 
 async function ask(prompt) {
@@ -91,15 +98,9 @@ async function ask(prompt) {
 async function cmdStatus(client, { json }) {
   const token = process.env.MCD_MCP_TOKEN;
   if (!token || token === 'YOUR_MCP_TOKEN_HERE') {
-    const msg =
-      '⚠️  未配置有效的 MCP Token。\n' +
-      '    1) 打开 https://open.mcd.cn/mcp ，点击右上角【登录】用手机号验证登录\n' +
-      '    2) 点击右上角【控制台】→【激活】申请 MCP Token\n' +
-      '    3) 将 Token 复制到项目根目录 .env 的 MCD_MCP_TOKEN（参考 .env.example）\n' +
-      '    4) 重新运行 mcd-save status';
     if (json) { console.log(JSON.stringify({ ok: false, reason: 'no_token' })); return 1; }
     console.log(BANNER);
-    console.log(msg);
+    console.log(NO_TOKEN_MSG);
     return 1;
   }
   const info = await client.initialize();
@@ -458,6 +459,25 @@ async function main() {
     return 0;
   }
   const cmd = args[0] || 'help';
+
+  // 需要 Token 的指令：缺少 Token 时给出友好引导（demo/help 除外）
+  const needsToken = ['status', 'tools', 'coupons', 'save', 'nutrition', 'campaign', 'points', 'stores'];
+  const token = process.env.MCD_MCP_TOKEN;
+  const hasToken = !!token && token !== 'YOUR_MCP_TOKEN_HERE';
+  if (needsToken.includes(cmd) && !hasToken) {
+    if (args.includes('--json')) {
+      if (cmd === 'status') {
+        console.log(JSON.stringify({ ok: false, reason: 'no_token' }));
+        return 1;
+      }
+      console.log(JSON.stringify({ ok: false, reason: 'no_token', hint: '登录 https://open.mcd.cn/mcp 获取 Token 后写入 .env' }));
+      return 1;
+    }
+    console.log(BANNER);
+    console.log(NO_TOKEN_MSG);
+    return 1;
+  }
+
   const json = args.includes('--json');
   const parseFlag = (flag) => {
     const i = args.indexOf(flag);

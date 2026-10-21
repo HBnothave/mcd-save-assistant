@@ -44,7 +44,7 @@ loadEnv();
 
 const { McpClient } = await import('./mcp-client.js');
 const { createTools, money, fmtList } = await import('./tools.js');
-const { buildBasket, comparePlan, filterValidPlans, planNutrition, parsePriceResult, matchMeals } =
+const { buildBasket, comparePlan, filterValidPlans, planNutrition, parsePriceResult, matchMeals, parseNutritionTable, parseMeals } =
   await import('./engine.js');
 
 const BANNER = `
@@ -181,28 +181,24 @@ async function cmdSave(client, { json, items, budget, storeKw }) {
   }
   console.log(`🎯 想吃：${keywords.join(' / ')}`);
 
-  // 1) 定位门店
+  // 1) 定位门店（到店自取 beType=1；按城市+关键词搜索 searchType=2）
   console.log('\n📍 正在查询附近门店…');
-  const addr = process.env.MCD_DEFAULT_ADDRESS;
-  let store = null;
-  if (addr) {
-    const nearby = await t.queryNearbyStores({ address: addr });
-    store = pickStore(nearby, storeKw);
-  } else {
-    const nearRaw = await t.queryNearbyStores();
-    store = pickStore(nearRaw, storeKw);
-  }
+  const city = process.env.MCD_DEFAULT_CITY || '上海';
+  const addr = process.env.MCD_DEFAULT_ADDRESS || '南京东路';
+  const nearby = await t.queryNearbyStores({ beType: 1, searchType: 2, city, keyword: addr });
+  const store = pickStore(nearby, storeKw);
   if (!store) {
-    console.log('未能在附近找到可服务门店。请设置 MCD_DEFAULT_ADDRESS 或使用 --store 指定门店。');
+    console.log('未能在附近找到可服务门店。请设置 MCD_DEFAULT_CITY / MCD_DEFAULT_ADDRESS 或使用 --store 指定门店。');
+    console.log('原始返回：' + (nearby.rawText || '').slice(0, 800));
     return 1;
   }
-  const storeId = store.storeId || store.storeCode || store.id || store.code;
+  const storeId = String(store.storeCode || store.storeId || store.code || '');
   console.log(`   已选门店: ${store.storeName || store.name || storeId}${storeId ? ` (${storeId})` : ''}`);
 
-  // 2) 拉取门店在售餐品
+  // 2) 拉取门店在售餐品（到店自取）
   console.log('\n🍟 正在拉取门店菜单…');
-  const meals = await t.queryMeals({ storeId });
-  const mealList = meals.arrayOf('meals', 'list', 'data.meals', 'data.list', 'products', 'data');
+  const meals = await t.queryMeals({ storeCode: storeId, orderType: 1, beType: 1 });
+  const mealList = parseMeals(meals.json);
   if (!mealList.length) {
     console.log('未识别到餐品列表，原始返回：');
     console.log(meals.rawText.slice(0, 3000));
@@ -211,39 +207,39 @@ async function cmdSave(client, { json, items, budget, storeKw }) {
   console.log(`   在售餐品 ${mealList.length} 款`);
 
   // 3) 构造购物篮
-  const { basket, missing } = buildBasket(mealList, keywords);
+  const { basket, missing } = buildBasket(mealList, keywords, { maxPerKeyword: 1 });
   if (missing.length) {
     console.log(`⚠️  未匹配到菜单项：${missing.join('、')}（将按已匹配项计算）`);
   }
   if (!basket.length) {
     console.log('没有在菜单中找到匹配项，尝试放宽：');
-    console.log('   菜单含：' + mealList.slice(0, 40).map((m) => m.name || m.mealName).filter(Boolean).join('、'));
+    console.log('   菜单含：' + mealList.slice(0, 40).map((m) => m.name).filter(Boolean).join('、'));
     return 1;
   }
 
-  // 4) 计算价格
+  // 4) 计算价格（到店自取：orderType=1, beType=1）
   console.log('\n💸 正在计算价格与优惠…');
+  const baseArgs = { storeCode: storeId, orderType: 1, beType: 1 };
   const results = [];
   // 方案 A：不用券
   try {
-    const r = await t.calculatePrice({ items: dedupeForCalc(basket) });
+    const r = await t.calculatePrice({ ...baseArgs, items: dedupeForCalc(basket) });
     results.push({ label: '无券', ...parsePriceResult(r.json), raw: r });
   } catch (e) { console.log('   （无券计算失败：' + e.message + '）'); }
 
   // 方案 B：用券（门店可用券）
-  for (const field of ['query-store-coupons']) {
-    try {
-      const sc = await t.queryStoreCoupons({ storeId });
-      const coupons = sc.arrayOf('coupons', 'list', 'data.coupons', 'data.list');
-      if (coupons.length) {
-        const r = await t.calculatePrice({
-          items: dedupeForCalc(basket),
-          coupons: coupons.map((c) => c.couponId || c.id || c.code).filter(Boolean),
-        });
-        results.push({ label: `门店券(${coupons.length})`, ...parsePriceResult(r.json), raw: r });
-      }
-    } catch (e) { /* 某些环境不支持，继续 */ }
-  }
+  try {
+    const sc = await t.queryStoreCoupons({ ...baseArgs });
+    const coupons = sc.arrayOf('coupons', 'list', 'data.coupons', 'data.list');
+    if (coupons.length) {
+      const r = await t.calculatePrice({
+        ...baseArgs,
+        items: dedupeForCalc(basket),
+        coupons: coupons.map((c) => c.couponId || c.couponCode || c.id || c.code).filter(Boolean),
+      });
+      results.push({ label: `门店券(${coupons.length})`, ...parsePriceResult(r.json), raw: r });
+    }
+  } catch (e) { /* 某些环境不支持，继续 */ }
 
   // 方案 C：我的券
   try {
@@ -251,8 +247,9 @@ async function cmdSave(client, { json, items, budget, storeKw }) {
     const coupons = mc.arrayOf('coupons', 'list', 'data.coupons', 'data.list').filter(Boolean);
     if (coupons.length) {
       const r = await t.calculatePrice({
+        ...baseArgs,
         items: dedupeForCalc(basket),
-        coupons: coupons.map((c) => c.couponId || c.id || c.code).filter(Boolean),
+        couponCode: coupons.map((c) => c.couponCode || c.couponId || c.id || c.code).filter(Boolean),
       });
       results.push({ label: `我的券(${coupons.length})`, ...parsePriceResult(r.json), raw: r });
     }
@@ -299,7 +296,7 @@ async function cmdSave(client, { json, items, budget, storeKw }) {
 }
 
 function pickStore(nearby, storeKw) {
-  const stores = nearby?.arrayOf('stores', 'list', 'data.stores', 'data.list', 'result') || [];
+  const stores = nearby?.arrayOf('stores', 'list', 'data.stores', 'data.list', 'result', 'data') || [];
   if (!stores.length) return null;
   if (storeKw) {
     const hit = matchMeals(stores, storeKw);
@@ -324,7 +321,11 @@ async function cmdNutrition(client, { json, kcal, target }) {
   const budget = Number(kcal || 600);
   const t = createTools(client);
   const foods = await t.listNutritionFoods();
-  const list = foods.arrayOf('foods', 'list', 'data.foods', 'data.list', 'items', 'data');
+  let list = foods.arrayOf('foods', 'list', 'data.foods', 'data.list', 'items', 'data');
+  // 兼容官方自定义分隔表格格式（[N]{列名}:\n 行数据）
+  if (!list.length && foods.json && typeof foods.json.data === 'string') {
+    list = parseNutritionTable(foods.json.data);
+  }
   const plan = planNutrition(list, budget, { strategy: target === 'balanced' ? 'balanced' : 'min_cost' });
 
   if (json) {
@@ -338,9 +339,14 @@ async function cmdNutrition(client, { json, kcal, target }) {
     return 1;
   }
   for (const s of plan.selected) {
-    console.log(`   • ${s.name} ×${s.quantity}  ${s.calories * s.quantity} kcal  ${money(s.cost * s.quantity)}`);
+    const price = s.hasPrice ? `  ${money(s.cost * s.quantity)}` : '';
+    console.log(`   • ${s.name} ×${s.quantity}  ${s.calories * s.quantity} kcal${price}`);
   }
-  console.log(`\n   合计：${plan.totalCalories} kcal  /  ${money(plan.totalCost)}`);
+  const totalPrice = plan.hasPrice ? ` / ${money(plan.totalCost)}` : '';
+  console.log(`\n   合计：${plan.totalCalories} kcal${totalPrice}`);
+  if (!plan.hasPrice) {
+    console.log('   （注：营养库不含价格，此处仅从热量角度推荐组合）');
+  }
   return 0;
 }
 
@@ -370,22 +376,28 @@ async function cmdPoints(client, { json }) {
   }
   console.log('\n⭐ 我的积分：');
   if (acc.isJson) {
-    const cfg = acc.json;
-    const avail = cfg.availablePoints ?? cfg.available ?? cfg.value ?? '--';
+    const cfg = acc.json?.data ?? acc.json;
+    const avail = cfg.availablePoint ?? cfg.availablePoints ?? cfg.available ?? cfg.value ?? '--';
+    const accum = cfg.accumulativePoint ?? cfg.accumulative ?? '--';
+    const expiring = cfg.currentMouthExpirePoint ?? cfg.expiringPoints ?? cfg.expiring ?? '--';
     console.log(`   可用积分：${avail}`);
-    console.log(`   （原始返回：${JSON.stringify(cfg).slice(0, 500)}）`);
+    if (accum !== '--') console.log(`   累计积分：${accum}`);
+    if (expiring !== '--') console.log(`   当月将过期：${expiring}`);
+    console.log(`   积分类型：${cfg.currency || '--'}`);
   } else {
     console.log('   ' + acc.rawText.slice(0, 1000));
   }
   console.log('\n🛍️  积分商城：');
   if (mall.isJson) {
-    const products = mall.arrayOf('products', 'list', 'data.products', 'data.list', 'items');
+    const products = mall.arrayOf('products', 'list', 'data.products', 'data.list', 'items', 'data');
     if (products.length) {
       products.slice(0, 10).forEach((p, i) => {
-        const name = p.name || p.productName || p.title || `商品${i + 1}`;
-        const points = p.points ?? p.pointPrice ?? p.pricePoints;
-        console.log(`   ${i + 1}. ${name}  ${points !== undefined ? `${points} 积分` : ''}`);
+        const name = p.spuName || p.name || p.productName || p.title || `商品${i + 1}`;
+        const points = p.point !== undefined ? p.point : (p.points ?? p.pointPrice ?? p.pricePoints);
+        const price = p.price !== undefined ? `  现金 ${money(Number(p.price))}` : '';
+        console.log(`   ${i + 1}. ${name}${points !== undefined && Number(points) > 0 ? `  ${points} 积分` : (points !== undefined ? '  积分兑换' : '')}${price}`);
       });
+      if (products.length > 10) console.log(`   … 等共 ${products.length} 件`);
     } else {
       console.log('   （JSON 返回，未识别到商品列表：' + JSON.stringify(mall.json).slice(0, 500) + '）');
     }
@@ -397,21 +409,23 @@ async function cmdPoints(client, { json }) {
 
 async function cmdStores(client, { json, address }) {
   const t = createTools(client);
-  const addr = address || process.env.MCD_DEFAULT_ADDRESS;
-  const r = addr ? await t.queryNearbyStores({ address: addr }) : await t.queryNearbyStores();
+  const city = process.env.MCD_DEFAULT_CITY || '上海';
+  const addr = address || process.env.MCD_DEFAULT_ADDRESS || '南京东路';
+  const r = await t.queryNearbyStores({ beType: 1, searchType: 2, city, keyword: addr });
   if (json) {
     console.log(JSON.stringify(r.json ?? { text: r.text }, null, 2));
     return 0;
   }
-  console.log('\n🏪 附近门店：');
+  console.log(`\n🏪 附近门店（${city}·${addr}）：`);
   if (r.isJson) {
-    const stores = r.arrayOf('stores', 'list', 'data.stores', 'data.list', 'result');
+    const stores = r.arrayOf('stores', 'list', 'data.stores', 'data.list', 'result', 'data');
     if (stores.length) {
       stores.forEach((s, i) => {
         const name = s.storeName || s.name || `门店${i + 1}`;
-        const id = s.storeId || s.storeCode || s.id || s.code || '';
+        const id = s.storeCode || s.storeId || s.id || s.code || '';
         const dist = s.distance ?? '';
-        console.log(`   ${i + 1}. ${name}${id ? ` (${id})` : ''}${dist ? `  距离${dist}` : ''}`);
+        const status = s.businessStatus ? '营业中' : '休息';
+        console.log(`   ${i + 1}. ${name}${id ? ` (${id})` : ''}${dist ? `  ${dist}m` : ''} ${status}`);
       });
     } else {
       console.log(JSON.stringify(r.json, null, 2).slice(0, 2000));
@@ -483,7 +497,9 @@ async function main() {
     const i = args.indexOf(flag);
     return i >= 0 ? args[i + 1] : undefined;
   };
-  const items = parseFlag('--items') || parseFlag('--want');
+  // 位置参数：`save "巨无霸 薯条 可乐"` 中 cmd 后的第一个非 flag 参数即想吃清单
+  const positional = args.slice(1).find((a) => !a.startsWith('--'));
+  const items = parseFlag('--items') || parseFlag('--want') || positional;
   const kcal = parseFlag('--kcal');
   const targetOption = parseFlag('--target');
   const budget = parseFlag('--budget');

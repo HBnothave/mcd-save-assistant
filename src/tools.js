@@ -18,24 +18,50 @@ export function extractJson(text) {
     try { return JSON.parse(fence[1].trim()); } catch { /* continue */ }
   }
 
-  // 3) 从可能包裹的字符串中找第一个 { 或 [ 到末尾
-  for (const open of ['{', '[']) {
-    const start = t.indexOf(open);
-    if (start >= 0) {
-      const slice = t.slice(start);
-      try {
-        const data = JSON.parse(slice);
-        return data;
-      } catch {
-        // 尝试平衡括号截断（处理尾部说明文字）
-        const balanced = tryBalance(slice);
-        if (balanced) {
-          try { return JSON.parse(balanced); } catch { /* continue */ }
-        }
-      }
+  // 3) 扫描所有可能的 { / [ 候选位置，取“最像 API JSON”的那一个
+  //    麦当劳 MCP 响应常见两种包装：
+  //      纯文本带 Markdown 结构说明（含 {code} 等干扰花括号）+ 末尾 "Original Response" JSON
+  //      → 需要避开干扰，取包含 success/data/message 等键的对象。
+  const candidates = collectJsonCandidates(t);
+  if (candidates.length) {
+    // 优先取“API 风格”对象：含 success / code / message / data 任一键
+    const apiStyle = candidates.find((c) => isApiStyle(c));
+    if (apiStyle) return apiStyle;
+    // 否则取解析出的最长对象（信息最全）
+    let best = null;
+    for (const c of candidates) {
+      if (!best || JSON.stringify(c).length > JSON.stringify(best).length) best = c;
     }
+    if (best) return best;
   }
   return null;
+}
+
+function isApiStyle(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+  return ['success', 'code', 'message', 'data', 'traceId'].some((k) => k in obj);
+}
+
+function collectJsonCandidates(t) {
+  const out = [];
+  const push = (parsed) => {
+    if (parsed !== undefined && parsed !== null) out.push(parsed);
+  };
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (ch !== '{' && ch !== '[') continue;
+    const slice = t.slice(i);
+    // 直接整体解析（文本恰好从 JSON 开始）
+    try { push(JSON.parse(slice)); continue; } catch { /* try balanced */ }
+    // 平衡括号截断
+    const balanced = tryBalance(slice);
+    if (balanced != null) {
+      try { push(JSON.parse(balanced)); } catch { /* continue */ }
+    }
+    // 避免扫描过多位置导致卡顿：最多扫描前 20000 字符
+    if (i > 60000) break;
+  }
+  return out;
 }
 
 function tryBalance(s) {

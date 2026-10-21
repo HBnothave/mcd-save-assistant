@@ -43,6 +43,66 @@ export function matchMeals(meals, keyword) {
 }
 
 /**
+ * 解析麦当劳 `query-meals` 返回（真实结构）：
+ *   data.categories[].meals[]  → 各分类餐品 code 列表
+ *   data.meals.{code}          → 餐品详情映射（name / currentPrice / originalPrice / tags / image ...）
+ * 展平为一个统一餐品列表，便于模糊匹配与价格计算。
+ *
+ * @param {object} json 解析后的 JSON 对象
+ * @returns {Array<object>} [{ code, name, category, currentPrice, originalPrice, tags, image }]
+ */
+export function parseMeals(json) {
+  const root = json?.data || json || {};
+  const detailMap = root.meals || {};
+  const categories = Array.isArray(root.categories) ? root.categories : [];
+
+  const out = [];
+  const seen = new Set();
+
+  for (const cat of categories) {
+    const catName = (cat.name || '').trim();
+    for (const m of cat.meals || []) {
+      const code = String(m.code || '');
+      if (!code || seen.has(code)) continue;
+      seen.add(code);
+      const detail = detailMap[code] || {};
+      out.push({
+        code,
+        name: detail.name || m.name || `餐品${code}`,
+        category: catName,
+        currentPrice: detail.currentPrice != null ? Number(detail.currentPrice) : null,
+        originalPrice: detail.originalPrice != null ? Number(detail.originalPrice) : null,
+        discountType: detail.discountType || null,
+        image: detail.image || null,
+        tags: m.tags || detail.tags || [],
+      });
+    }
+  }
+
+  // 常点餐品（frequent）作为补充
+  const frequent = root.frequent;
+  if (frequent && !Array.isArray(frequent) && frequent.code) {
+    const code = String(frequent.code);
+    if (!seen.has(code)) {
+      seen.add(code);
+      const detail = detailMap[code] || {};
+      out.push({
+        code,
+        name: detail.name || frequent.name || `餐品${code}`,
+        category: '常点',
+        currentPrice: detail.currentPrice != null ? Number(detail.currentPrice) : null,
+        originalPrice: detail.originalPrice != null ? Number(detail.originalPrice) : null,
+        discountType: detail.discountType || null,
+        image: detail.image || null,
+        tags: frequent.tags || detail.tags || [],
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * 根据“想要的商品关键词列表”，从门店售卖列表构造购物篮（标准结构，供 calculate-price 使用）。
  * calculate-price 的商品项字段以麦当劳官方返回为准，这里统一映射常见字段名。
  * @param {Array} meals 门店售卖餐品列表
@@ -71,13 +131,15 @@ export function buildBasket(meals, keywords, { maxPerKeyword = 3 } = {}) {
 
 /** 把 query-meals 的餐品对象规整为购物篮条目（兼容多种返回字段） */
 export function normalizeCartItem(meal) {
+  // calculate-price/create-order 的购物项字段为 productCode
   const item = {
     code: meal.code || meal.mealCode || meal.productCode || meal.skuCode || meal.id,
+    productCode: meal.code || meal.mealCode || meal.productCode || meal.skuCode || meal.id,
     name: meal.name || meal.mealName || meal.productName || '未知餐品',
     quantity: meal.quantity || 1,
   };
   // 可替换/可加购字段尽量透传，避免丢信息
-  for (const k of ['price', 'specifications', 'options', 'attrs', 'isMeal', 'tags']) {
+  for (const k of ['price', 'currentPrice', 'specifications', 'options', 'attrs', 'isMeal', 'tags']) {
     if (meal[k] !== undefined) item[k] = meal[k];
   }
   return item;
@@ -85,20 +147,29 @@ export function normalizeCartItem(meal) {
 
 /**
  * 从 calculate-price 返回中解析应付总额（兼容多字段）。
- * @returns {{original: number|null, payable: number|null, discount: number|null, fee: number|null}}
+ * 麦当劳 MCP 官方返回：data.productPrice / data.originalPrice / data.discount / data.price（单位：分）。
+ * @returns {{original: number|null, payable: number|null, discount: number|null, fee: number|null, cents: boolean}}
  */
 export function parsePriceResult(json) {
-  const root = json || {};
+  const root = json?.data ?? json ?? {};
   const num = (v) => {
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
   };
+  // 若命中“单位分”字段（price/originalPrice/discount），需转元
+  const hasCents = root.price !== undefined || root.originalPrice !== undefined || root.productPrice !== undefined || root.productOriginalPrice !== undefined;
+  const cent2yuan = (v) => (v == null ? null : num(v) / 100);
+  const fen = (v) => num(v);
+  const money = hasCents ? cent2yuan : fen;
+
   return {
-    total: num(root.totalAmount ?? root.total ?? root.payableAmount ?? root.orderAmount),
-    original: num(root.originalAmount ?? root.goodsAmount ?? root.totalPrice),
-    discount: num(root.discountAmount ?? root.couponDiscount ?? root.discount),
-    deliveryFee: num(root.deliveryFee ?? root.deliveryAmount ?? root.freight),
-    payable: num(root.payAmount ?? root.payable ?? root.finalAmount ?? root.actualAmount),
+    total: money(root.totalAmount ?? root.price ?? root.payableAmount ?? root.orderAmount),
+    original: money(root.originalAmount ?? root.originalPrice ?? root.goodsAmount ?? root.totalPrice),
+    discount: money(root.discountAmount ?? root.discount ?? root.couponDiscount),
+    deliveryFee: money(root.deliveryFee ?? root.deliveryPrice ?? root.deliveryAmount ?? root.freight),
+    payable: money(root.payAmount ?? root.price ?? root.payable ?? root.finalAmount ?? root.actualAmount),
+    cents: hasCents,
+    raw: root,
   };
 }
 
@@ -121,6 +192,68 @@ export function filterValidPlans(plans) {
 }
 
 /**
+ * 解析麦当劳 MCP `list-nutrition-foods` 返回的自定义分隔表格格式。
+ *
+ * 实际返回示例（data 字符串）：
+ *   "[160]{productName,nutritionDescription,energyKj,energyKcal,protein,fat,carbohydrate,sodium,calcium}:\n
+ *     猪柳麦满分,null,1288,308,16,16,24,781,213\n
+ *     中薯条,null,1210,289,4,12,38,165,18\n..."
+ *
+ * 格式：`[数量]{列名,逗号分隔}:\n` + 每行 `  名称,null,v1,v2,...`（前导空格 + 逗号分隔）。
+ * @param {string} data 返回的 data 字符串
+ * @param {object} [opts]
+ * @param {string} [opts.nameField='productName'] 名称列
+ * @param {string} [opts.calorieField='energyKcal'] 热量列（kcal）
+ * @param {string} [opts.priceField] 价格列（如有）
+ * @returns {Array<object>} 规范化条目数组
+ */
+export function parseNutritionTable(data, { nameField = 'productName', calorieField = 'energyKcal', priceField = 'cost' } = {}) {
+  if (typeof data !== 'string') return [];
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  // 形如 [160]{col1,col2}: 的头部
+  const headerMatch = data.match(/\[\d+\]\s*\{([^}]*)\}\s*:\s*\n?([\s\S]*)$/);
+  if (!headerMatch) return [];
+
+  const columns = headerMatch[1].split(',').map((c) => c.trim()).filter(Boolean);
+  const body = headerMatch[2];
+
+  const items = [];
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const values = trimmed.split(',').map((v) => {
+      const s = v.trim();
+      return s === 'null' || s === '' ? null : s;
+    });
+    if (values.length < 2) continue;
+    const rec = {};
+    columns.forEach((col, i) => {
+      rec[col] = values[i] !== undefined ? values[i] : null;
+    });
+    // 名称与热量是必须的
+    const name = rec[nameField];
+    if (!name) continue;
+    items.push({
+      name: String(name),
+      calories: num(rec[calorieField]),
+      cost: priceField ? (rec[priceField] !== null && rec[priceField] !== undefined ? num(rec[priceField]) : 0) : 0,
+      energyKj: rec.energyKj !== null && rec.energyKj !== undefined ? num(rec.energyKj) : 0,
+      protein: rec.protein !== null && rec.protein !== undefined ? num(rec.protein) : null,
+      fat: rec.fat !== null && rec.fat !== undefined ? num(rec.fat) : null,
+      carbohydrate: rec.carbohydrate !== null && rec.carbohydrate !== undefined ? num(rec.carbohydrate) : null,
+      sodium: rec.sodium !== null && rec.sodium !== undefined ? num(rec.sodium) : null,
+      calcium: rec.calcium !== null && rec.calcium !== undefined ? num(rec.calcium) : null,
+      raw: rec,
+    });
+  }
+  return items;
+}
+
+/**
  * 营养搭配：基于 list-nutrition-foods 的结果，在给定热量预算内给出组合建议。
  * 采用贪心：按“每千卡价格”或用户指定偏好挑选。字段以官方返回为准，这里做兼容去重。
  * @param {Array} foods 营养餐品列表
@@ -139,13 +272,24 @@ export function planNutrition(foods, calorieBudget, { strategy = 'min_cost' } = 
     }))
     .filter((f) => f.name && f.calories > 0);
 
+  // 按名称去重（营养库存在重复行）
+  const byName = new Map();
+  for (const f of items) {
+    if (!byName.has(f.name)) byName.set(f.name, f);
+  }
+  const uniq = [...byName.values()];
+
   // 按热量预算过滤
-  const affordable = items.filter((f) => f.calories <= calorieBudget);
-  const pool = affordable.length ? affordable : items;
+  const affordable = uniq.filter((f) => f.calories <= calorieBudget);
+  let pool = affordable.length ? affordable : uniq;
+
+  // 无价格数据（cost 全为 0）时自动降级为 balanced（靠近 200 kcal/份），保证组合合理
+  const hasPrice = pool.some((f) => f.cost > 0);
+  const effectiveStrategy = !hasPrice ? 'balanced' : strategy;
 
   // 排序策略
-  pool.sort((a, b) => {
-    if (strategy === 'min_cost') {
+  pool = [...pool].sort((a, b) => {
+    if (effectiveStrategy === 'min_cost') {
       const perA = a.cost / a.calories;
       const perB = b.cost / b.calories;
       return perA - perB || a.cost - b.cost;
@@ -166,12 +310,12 @@ export function planNutrition(foods, calorieBudget, { strategy = 'min_cost' } = 
     const maxQty = Math.floor(used / f.calories);
     if (maxQty < 1) continue;
     const qty = Math.min(3, maxQty); // 单个餐品最多 3 份，合理
-    selected.push({ name: f.name, calories: f.calories, cost: f.cost, quantity: qty });
+    selected.push({ name: f.name, calories: f.calories, cost: f.cost, quantity: qty, hasPrice });
     const kcal = f.calories * qty;
     used -= kcal;
     totalCalories += kcal;
     totalCost += f.cost * qty;
     if (used <= 0) break;
   }
-  return { selected, totalCalories, totalCost };
+  return { selected, totalCalories, totalCost, hasPrice };
 }

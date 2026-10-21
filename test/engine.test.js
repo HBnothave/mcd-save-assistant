@@ -9,6 +9,8 @@ import {
   comparePlan,
   filterValidPlans,
   planNutrition,
+  parseNutritionTable,
+  parseMeals,
 } from '../src/engine.js';
 import { extractJson } from '../src/tools.js';
 import { demoData, demoBestPlan } from '../src/demo-data.js';
@@ -104,4 +106,60 @@ test('extractJson 平衡括号截断', () => {
   const s = '{"score": 95, "note": "非常推荐"} \n补充说明文字';
   const out = extractJson(s);
   assert.deepEqual(out, { score: 95, note: '非常推荐' });
+});
+
+test('extractJson 跳过 Markdown 结构说明里的干扰花括号，取 API JSON', () => {
+  const s = `# API Response\n- **data**: 字段说明 {code}\n- **price**: {currentPrice}\n\n## Original Response\n\n{"success":true,"code":200,"data":{"categories":[],"meals":{}},"message":"ok"}\n## 说明文字`;
+  const out = extractJson(s);
+  assert.equal(out.success, true);
+  assert.equal(out.code, 200);
+});
+
+test('parseMeals 展平 categories + details 映射', () => {
+  const json = {
+    data: {
+      categories: [
+        { name: '汉堡', meals: [{ code: '1100', tags: ['经典'] }] },
+        { name: '小食', meals: [{ code: '4810' }] },
+      ],
+      meals: {
+        1100: { name: '巨无霸', currentPrice: '25.5', originalPrice: '25.5' },
+        4810: { name: '薯条', currentPrice: '13.5' },
+      },
+      frequent: { code: '9901', tags: ['常点'] },
+    },
+  };
+  const meals = parseMeals(json);
+  assert.equal(meals.length, 3);
+  const bigmac = meals.find((m) => m.code === '1100');
+  assert.equal(bigmac.name, '巨无霸');
+  assert.equal(bigmac.currentPrice, 25.5);
+  assert.equal(bigmac.category, '汉堡');
+});
+
+test('parseNutritionTable 解析官方分隔表格格式', () => {
+  const data = `[3]{productName,nutritionDescription,energyKj,energyKcal,protein,fat,carbohydrate,sodium,calcium}:
+  巨无霸,null,2146,513,27,26,42,961,171
+  中薯条,null,1210,289,4,12,38,165,18
+  中杯可乐,null,616,147,0,0,36,0,10`;
+  const items = parseNutritionTable(data);
+  assert.equal(items.length, 3);
+  assert.equal(items[0].name, '巨无霸');
+  assert.equal(items[0].calories, 513);
+  assert.equal(items[2].calories, 147);
+  assert.equal(parseNutritionTable('not-a-table').length, 0);
+});
+
+test('planNutrition 无价格数据时自动走 balanced 并去重', () => {
+  const foods = [
+    { name: '巨无霸', calories: 220 },
+    { name: '巨无霸', calories: 513 }, // 重复行应去重
+    { name: '咖啡', calories: 13 },
+    { name: '红茶', calories: 2 },
+  ];
+  const plan = planNutrition(foods, 600, { strategy: 'min_cost' });
+  const names = plan.selected.map((s) => s.name);
+  assert.equal(names.includes('巨无霸'), true);
+  assert.equal(plan.totalCalories <= 610, true);
+  assert.equal(plan.hasPrice, false);
 });

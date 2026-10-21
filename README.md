@@ -89,36 +89,51 @@ node src/index.js demo
 
 ## 📖 使用示例
 
-### 真实输出（连接真实 MCP 后）
+### 真实输出（真实 MCP 联调实测）
 
 ```text
 🎯 想吃：巨无霸 / 薯条 / 可乐
 📍 正在查询附近门店…
-   已选门店: 麦当劳(南京东路店) (STORE_123)
+   已选门店: 麦当劳上海黄浦悦荟广场餐厅 (1450104)
+
 🍟 正在拉取门店菜单…
-   在售餐品 128 款
+   在售餐品 116 款
+
 💸 正在计算价格与优惠…
 ✅ 最优方案：
    • 巨无霸 ×1
-   • 中薯条 ×1
-   • 中杯可乐 ×1
-   应付：   ¥30.50（方案：我的券(3)）
-   原价：   ¥44.00
-   已优惠： -¥13.50
+   • 薯条 ×1
+   • 可乐 ×1
+   应付：   ¥48.50（方案：无券）
+   原价：   ¥48.50
+   已优惠： -¥0.00
 
 📋 全部试算：
-   无券            ¥44.00
-   门店券(2)       ¥37.00
-   我的券(3)       ¥30.50
+   无券           ¥48.50
+```
+
+### 一键领券（真实领到 3 张券）
+
+```text
+📢 麦麦省一键领券：
+   总计: 3 张优惠券
+   成功: 3 张
+
+   - 11.9元麦辣鸡腿堡
+   - 19.9元王牌炸鸡任选2
+   - 免费脆薯饼
+
+🎫 我的优惠券：
+   共 2 张可用优惠券
 ```
 
 ### 营养搭配
 
 ```text
 🥗 营养搭配（热量预算 600 kcal）：
-   • 大薯条 ×1  460 kcal  ¥14.50
-   • 中杯可乐 ×1  130 kcal  ¥9.00
-   合计：590 kcal / ¥23.50
+   • 冰燕麦奶中杯 ×3  597 kcal
+   • 锡兰红茶 ×1  2 kcal
+   合计：599 kcal
 ```
 
 ---
@@ -143,7 +158,7 @@ node src/index.js demo
 - 自研 **最小化 Streamable HTTP MCP 客户端**（`src/mcp-client.js`），符合 MCP 协议 2025-03-26，**零第三方依赖**
 - 完整的 `initialize` 握手、Session 管理、`tools/list`、`tools/call`，兼容 JSON 与 SSE 响应
 - 内置 **模糊餐品匹配、购物篮去重、价格字段兼容解析、热量预算贪心算法**（`src/engine.js`）
-- 纯逻辑层与展示层分离，附 **13 个单元测试**，`npm test` 一键跑通
+- 纯逻辑层与展示层分离，附 **19 个单元测试**，`npm test` 一键跑通
 
 ---
 
@@ -184,7 +199,7 @@ node src/index.js demo
 ## 🧑‍💻 开发与测试
 
 ```bash
-# 运行全部单元测试（13 个，纯逻辑，无需 Token）
+# 运行全部单元测试（19 个，纯逻辑，无需 Token）
 npm test
 # 等价于：
 node --test "test/*.test.js"
@@ -196,7 +211,7 @@ node src/index.js demo
 ```
 ✔ matchMeals 精确名称命中 ✔ buildBasket 构造购物篮 ✔ parsePriceResult 字段兼容
 ✔ comparePlan 金额小的优先 ✔ filterValidPlans 过滤无效 ✔ planNutrition 热量预算
-✔ extractJson 代码块/前后缀兼容 …… （13/13 passing）
+✔ extractJson 代码块/前后缀兼容 …… （19/19 passing）
 ```
 
 ---
@@ -212,7 +227,7 @@ mcd-save-assistant/
 │   ├── engine.js         # 省钱/营养/匹配引擎（纯逻辑）
 │   └── demo-data.js      # 演示数据（仅 demo/测试使用）
 ├── test/
-│   └── engine.test.js    # 13 个单元测试
+│   └── engine.test.js    # 19 个单元测试
 ├── README.md             # 本文件
 ├── CONTEST_DECLARATION.md # 参赛声明（官方原文，不可修改）
 ├── MCP_INTEGRATION.md    # MCP 集成说明

@@ -7,7 +7,7 @@
 [![Node](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=nodedotjs)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP-blueviolet)](https://github.com/M-China/mcd-mcp-server)
 [![License](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
-[![tests](https://img.shields.io/badge/tests-19%2F19%20passing-brightgreen)](#-开发与测试)
+[![tests](https://img.shields.io/badge/tests-21%2F21%20passing-brightgreen)](#-开发与测试)
 
 **“打工人也想吃好麦当劳，更想花得聪明。”**
 
@@ -161,7 +161,7 @@ node src/index.js demo
 - 自研 **最小化 Streamable HTTP MCP 客户端**（`src/mcp-client.js`），符合 MCP 协议 2025-03-26，**零第三方依赖**
 - 完整的 `initialize` 握手、Session 管理、`tools/list`、`tools/call`，兼容 JSON 与 SSE 响应
 - 内置 **模糊餐品匹配、购物篮去重、价格字段兼容解析、热量预算贪心算法**（`src/engine.js`）
-- 纯逻辑层与展示层分离，附 **19 个单元测试**，`npm test` 一键跑通
+- 纯逻辑层与展示层分离，附 **21 个单元测试**，`npm test` 一键跑通
 
 ---
 
@@ -202,7 +202,7 @@ node src/index.js demo
 ## 🧑‍💻 开发与测试
 
 ```bash
-# 运行全部单元测试（19 个，纯逻辑，无需 Token）
+# 运行全部单元测试（21 个，纯逻辑，无需 Token）
 npm test
 # 等价于：
 node --test "test/*.test.js"
@@ -214,7 +214,7 @@ node src/index.js demo
 ```
 ✔ matchMeals 精确名称命中 ✔ buildBasket 构造购物篮 ✔ parsePriceResult 字段兼容
 ✔ comparePlan 金额小的优先 ✔ filterValidPlans 过滤无效 ✔ planNutrition 热量预算
-✔ extractJson 代码块/前后缀兼容 …… （19/19 passing）
+✔ extractJson 代码块/前后缀兼容 …… （21/21 passing）
 ```
 
 ---
@@ -230,7 +230,7 @@ mcd-save-assistant/
 │   ├── engine.js         # 省钱/营养/匹配引擎（纯逻辑）
 │   └── demo-data.js      # 演示数据（仅 demo/测试使用）
 ├── test/
-│   └── engine.test.js    # 19 个单元测试
+│   └── engine.test.js    # 21 个单元测试
 ├── README.md             # 本文件
 ├── CONTEST_DECLARATION.md # 参赛声明（官方原文，不可修改）
 ├── MCP_INTEGRATION.md    # MCP 集成说明

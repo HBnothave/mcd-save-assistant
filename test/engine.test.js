@@ -38,6 +38,29 @@ test('buildBasket 构造购物篮并报告缺失项', () => {
   assert.ok(basket.every((b) => b.code));
 });
 
+test('matchMeals 核心短语匹配（麦辣鸡腿堡 → 麦辣鸡腿汉堡）', () => {
+  const meals = [
+    { code: '1440', name: '麦辣鸡腿汉堡' },
+    { code: '9900', name: '麦辣鸡腿堡四件套' },
+    { code: '9999', name: '巨无霸' },
+  ];
+  const hits = matchMeals(meals, '麦辣鸡腿堡');
+  // 两个“麦辣鸡腿”相关项都应命中；“巨无霸”不应命中
+  assert.ok(hits.some((m) => m.code === '1440'));
+  assert.ok(hits.some((m) => m.code === '9900'));
+  assert.ok(!hits.some((m) => m.code === '9999'));
+});
+
+test('buildBasket preferCodes 优先选有券候选', () => {
+  const meals = [
+    { code: '1440', name: '麦辣鸡腿汉堡' },
+    { code: '9900', name: '麦辣鸡腿堡四件套' },
+  ];
+  const prefer = new Set(['1440']);
+  const { basket } = buildBasket(meals, ['麦辣鸡腿堡'], { maxPerKeyword: 3, preferCodes: prefer });
+  assert.equal(basket[0].productCode, '1440');
+});
+
 test('normalizeCartItem 字段兼容', () => {
   const item = normalizeCartItem({ mealCode: 'X1', mealName: '测试', quantity: 2 });
   assert.equal(item.code, 'X1');

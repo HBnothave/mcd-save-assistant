@@ -195,7 +195,7 @@ async function cmdSave(client, { json, items, budget, storeKw }) {
   const storeId = String(store.storeCode || store.storeId || store.code || '');
   console.log(`   已选门店: ${store.storeName || store.name || storeId}${storeId ? ` (${storeId})` : ''}`);
 
-  // 2) 拉取门店在售餐品（到店自取）
+  // 2) 拉取门店在售餐品 + 门店可用券（到店自取）
   console.log('\n🍟 正在拉取门店菜单…');
   const meals = await t.queryMeals({ storeCode: storeId, orderType: 1, beType: 1 });
   const mealList = parseMeals(meals.json);
@@ -206,8 +206,18 @@ async function cmdSave(client, { json, items, budget, storeKw }) {
   }
   console.log(`   在售餐品 ${mealList.length} 款`);
 
-  // 3) 构造购物篮
-  const { basket, missing } = buildBasket(mealList, keywords, { maxPerKeyword: 1 });
+  // 拉取门店可用券，用于“优先选能省钱的单品”
+  let storeCouponsForPref = [];
+  try {
+    const sc = await t.queryStoreCoupons({ storeCode: storeId, orderType: 1, beType: 1 });
+    storeCouponsForPref = sc.arrayOf('coupons', 'list', 'data.coupons', 'data.list', 'data');
+  } catch (e) { /* 券接口异常不阻塞流程 */ }
+  const couponProductCodes = new Set(
+    storeCouponsForPref.flatMap((c) => (c.products || []).map((p) => String(p.productCode)).filter(Boolean))
+  );
+
+  // 3) 构造购物篮（省钱优先：同关键词有券候选时优先选有券单品）
+  const { basket, missing } = buildBasket(mealList, keywords, { maxPerKeyword: 1, preferCodes: couponProductCodes });
   if (missing.length) {
     console.log(`⚠️  未匹配到菜单项：${missing.join('、')}（将按已匹配项计算）`);
   }
@@ -227,32 +237,22 @@ async function cmdSave(client, { json, items, budget, storeKw }) {
     results.push({ label: '无券', ...parsePriceResult(r.json), raw: r });
   } catch (e) { console.log('   （无券计算失败：' + e.message + '）'); }
 
-  // 方案 B：用券（门店可用券）
+  // 方案 B：用券（门店可用券）—— 自动把适用券挂到对应购物项
   try {
-    const sc = await t.queryStoreCoupons({ ...baseArgs });
-    const coupons = sc.arrayOf('coupons', 'list', 'data.coupons', 'data.list');
+    const coupons = storeCouponsForPref;
     if (coupons.length) {
-      const r = await t.calculatePrice({
-        ...baseArgs,
-        items: dedupeForCalc(basket),
-        coupons: coupons.map((c) => c.couponId || c.couponCode || c.id || c.code).filter(Boolean),
-      });
-      results.push({ label: `门店券(${coupons.length})`, ...parsePriceResult(r.json), raw: r });
+      const withCoupon = applyCouponsToBasket(basket, coupons);
+      const r = await t.calculatePrice({ ...baseArgs, items: withCoupon });
+      const appliedCount = withCoupon.filter((x) => x.couponCode || x.couponId).length;
+      results.push({ label: `门店券(${appliedCount})`, ...parsePriceResult(r.json), raw: r });
     }
   } catch (e) { /* 某些环境不支持，继续 */ }
 
-  // 方案 C：我的券
+  // 方案 C：我的券（query-my-coupons 返回 Markdown 无券码，此处仅展示；真券以门店券为准）
   try {
     const mc = await t.queryMyCoupons();
-    const coupons = mc.arrayOf('coupons', 'list', 'data.coupons', 'data.list').filter(Boolean);
-    if (coupons.length) {
-      const r = await t.calculatePrice({
-        ...baseArgs,
-        items: dedupeForCalc(basket),
-        couponCode: coupons.map((c) => c.couponCode || c.couponId || c.id || c.code).filter(Boolean),
-      });
-      results.push({ label: `我的券(${coupons.length})`, ...parsePriceResult(r.json), raw: r });
-    }
+    const couponCount = /共\s*(\d+)\s*张可用/.exec(mc.rawText || '')?.[1] || '?';
+    console.log(`   （我的券：${couponCount} 张可用，具体核销以门店可用券为准）`);
   } catch (e) { /* 继续 */ }
 
   // 5) 输出最优
@@ -315,6 +315,34 @@ function dedupeForCalc(basket) {
     else map.set(key, { ...it });
   }
   return [...map.values()];
+}
+
+/**
+ * 把门店可用券自动挂到购物篮对应商品上（coupon 用法：同个 item 中 couponId+couponCode 同时传）。
+ * @param {Array} basket 购物篮（含 code/productCode）
+ * @param {Array} coupons query-store-coupons 返回的券列表（含 title/couponId/couponCode/products[].productCode）
+ * @returns {Array} 应用了券的购物篮
+ */
+function applyCouponsToBasket(basket, coupons) {
+  // 券 → 适用商品编码映射
+  const couponByProduct = new Map();
+  for (const cp of coupons) {
+    const productCodes = (cp.products || []).map((p) => String(p.productCode)).filter(Boolean);
+    const code = cp.couponCode;
+    const id = cp.couponId;
+    if (!code || !id) continue;
+    for (const pc of productCodes) {
+      if (!couponByProduct.has(pc)) couponByProduct.set(pc, { couponCode: code, couponId: id, title: cp.title });
+    }
+  }
+  return dedupeForCalc(basket).map((item) => {
+    const key = String(item.productCode || item.code || '');
+    const matched = couponByProduct.get(key);
+    if (matched) {
+      return { ...item, couponCode: matched.couponCode, couponId: matched.couponId };
+    }
+    return item;
+  });
 }
 
 async function cmdNutrition(client, { json, kcal, target }) {

@@ -34,10 +34,20 @@ export function matchMeals(meals, keyword) {
     if (code && code === kw) score = 100;
     else if (name === kw) score = 90;
     else if (name.includes(kw)) score = 70;
-    else if (tags.some((t) => t === kw)) score = 60;
-    else if (tags.some((t) => t.includes(kw))) score = 40;
-
-    if (score > 0) scored.push({ meal, score, name: meal.name || meal.mealName });
+    else if (name.startsWith(kw)) score = 68;
+    else {
+      // 核心短语匹配：去掉名称中的“汉堡/卷/套餐”等后，仍包含关键词主体
+      // 例如 kw="麦辣鸡腿堡" 命中 "麦辣鸡腿汉堡"（去“汉”）
+      const normalized = name.replace(/套餐|汉堡|堡|卷/g, '');
+      const kwNormalized = kw.replace(/套餐|汉堡|堡|卷/g, '');
+      if (kwNormalized.length >= 1 && normalized.includes(kwNormalized)) score = 62;
+    }
+    if (score > 0) {
+      // 微弱得分（核心短语）低于标签匹配
+      if (tags.some((t) => t === kw) && score < 60) score = 60;
+      else if (tags.some((t) => t.includes(kw)) && score < 40) score = 40;
+      scored.push({ meal, score, name: meal.name || meal.mealName });
+    }
   }
   return scored.sort((a, b) => b.score - a.score).map((s) => s.meal);
 }
@@ -111,9 +121,10 @@ export function parseMeals(json) {
  * @param {number} [opts.maxPerKeyword=3] 每个关键词最多候选数量
  * @returns {{basket: object[], missing: string[]}}
  */
-export function buildBasket(meals, keywords, { maxPerKeyword = 3 } = {}) {
+export function buildBasket(meals, keywords, { maxPerKeyword = 3, preferCodes = null } = {}) {
   const missing = [];
   const picks = [];
+  const preferred = preferCodes instanceof Set ? preferCodes : new Set();
 
   for (const kw of keywords) {
     const hits = matchMeals(meals, kw);
@@ -121,8 +132,11 @@ export function buildBasket(meals, keywords, { maxPerKeyword = 3 } = {}) {
       missing.push(kw);
       continue;
     }
-    // 为避免组合爆炸，每个关键词最多取前 N 个候选
-    for (const hit of hits.slice(0, maxPerKeyword)) {
+    // “省钱优先”：若其中有享受优惠（有对应券）的候选，优先选它（最多 1 个），
+    // 其余仍作为备选（避免组合爆炸，取前 N 个）
+    const preferredHits = hits.filter((m) => preferred.has(String(m.code || m.productCode || '')));
+    const chosen = preferredHits.length ? preferredHits.slice(0, 1) : hits.slice(0, maxPerKeyword);
+    for (const hit of chosen.slice(0, maxPerKeyword)) {
       picks.push(normalizeCartItem(hit));
     }
   }

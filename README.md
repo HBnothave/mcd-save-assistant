@@ -114,6 +114,7 @@ node src/index.js demo
 
 > 实测：同是“麦辣鸡腿堡+薯条+可乐”，系统自动判定**有 11.9 元券可用**，优先选择能用券的单品，
 > 一举帮你省下 **¥10.60**。这就是「麦门省钱助手」的价值——不止查价，而是**自动帮你选最省的买法**。
+> 完整真实运行记录见 [`docs/demo-output.txt`](./docs/demo-output.txt) 与 [`docs/coupons-output.txt`](./docs/coupons-output.txt)。
 
 ### 一键领券（真实领到 3 张券）
 

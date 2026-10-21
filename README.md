@@ -7,7 +7,7 @@
 [![Node](https://img.shields.io/badge/Node.js-%3E%3D18-339933?logo=nodedotjs)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP-blueviolet)](https://github.com/M-China/mcd-mcp-server)
 [![License](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
-[![tests](https://img.shields.io/badge/tests-13%2F13%20passing-brightgreen)](#-开发与测试)
+[![tests](https://img.shields.io/badge/tests-19%2F19%20passing-brightgreen)](#-开发与测试)
 
 **“打工人也想吃好麦当劳，更想花得聪明。”**
 
